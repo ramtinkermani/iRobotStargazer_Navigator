@@ -1,0 +1,24 @@
+#IncludeRegexLine: ^[ 	]*#[ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../include/memint.h
+memuser.h
+../include/memuser.h
+
+../include/memuser.h
+stdio.h
+-
+
+/opt/ros/electric/stacks/irobot_stargazer/src/memblock.c
+memint.h
+/opt/ros/electric/stacks/irobot_stargazer/src/memint.h
+
+/opt/ros/electric/stacks/irobot_stargazer/src/memrec.c
+memint.h
+/opt/ros/electric/stacks/irobot_stargazer/src/memint.h
+

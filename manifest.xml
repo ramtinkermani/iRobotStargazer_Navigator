@@ -1,0 +1,19 @@
+<package>
+  <description brief="irobot_stargazer">
+  This program is supposed to create irobot navigation system which uses stargazer for localization in its environment. Events are used to direct the irobot to move and based on that it fine tunes its location using data from the stargazer.
+     irobot_stargazer
+
+  </description>
+  <author>Swingingiant</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/irobot_stargazer</url>
+  <depend package="std_msgs"/>
+  <depend package="rospy"/>
+  <depend package="roscpp"/>
+  <depend package="stargazer_cu"/>
+  <depend package="irobot_create_2_1"/>
+
+</package>
+
+

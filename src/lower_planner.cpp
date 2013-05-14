@@ -1,0 +1,554 @@
+
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <pthread.h>
+#include "ros/ros.h"
+#include <std_msgs/Int8.h>
+#include "stargazer_cu/Pose2DTagged.h"
+#include "robot_mover.h"
+#include "irobot_create_2_1/Turn.h"// added to check for service
+#include "irobot_create_2_1/Tank.h"
+#include "irobot_create_2_1/Stop.h"
+#include "irobot_create_2_1/Circle.h"
+
+#define TOTAL_MARKERS   13
+
+struct move_event *event_queue = NULL;
+struct coordinate curr_location;// do not use without curr_location_lock mutex
+int curr_marker;// do not use without curr_location_lock mutex
+
+FILE *debug_move;
+
+pthread_mutex_t event_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t wait_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t curr_location_lock = PTHREAD_MUTEX_INITIALIZER;
+
+struct marker_cord markers[TOTAL_MARKERS]; // x , y , orientation angle
+
+//function to turn a certain amount of degrees
+
+// this function adds two angles and returns the result back keeping them
+// positive and ensuring that they are between the range of 0 - 360
+float add_angle(float ang1, float ang2)
+{
+    ang1 = ang1 + ang2;
+    if(ang1 > 360)
+    {
+        ang1 = ang1 - 360;
+    }
+    if(ang1 < 0)
+    {
+        ang1 = 360 + ang1;
+    }
+
+    return ang1;
+}
+void robot_angle_turn(float angle)
+{
+    long int turn_sec = 0;
+    irobot_create_2_1::Turn turn;
+    irobot_create_2_1::Tank tank;
+//    irobot_create_2_1::Turn::Request req;
+//    irobot_create_2_1::Turn::Response res;
+    if(angle <= 180)
+    {
+        //system("rosservice call -- turn 0 -10");//
+        turn.request.clear = 0;
+        turn.request.turn = -50;
+	//req.clear = 0;
+	//req.turn = -10;
+	ros::service::call("turn",turn);
+
+	//irobot_create_2_1::Turn(wow);
+	//irobot_create_2_1::Turn(req, res);
+        ///turn_sec = (angle * 195000)/9;
+    }
+    else
+    {
+        //system("rosservice call -- turn 0 10");//
+        turn.request.clear = 0;
+        turn.request.turn = 50;
+        ros::service::call("turn", turn);
+       //req.clear = 0;
+        //req.turn = 10;
+
+//	irobot_create_2_1::Turn(wow);
+	//irobot_create_2_1::Turn(req, res);
+        ///turn_sec = ((360-angle) * 195000)/9;
+    }
+//    fprintf(debug_move, "sleep request: %ld\n", turn_sec);
+    ///usleep(turn_sec); //Ramtin commented lines
+    ///tank.request.clear = 0;
+    ///tank.request.left = 0;
+   /// tank.request.right = 0;
+//    system("rosservice call tank 0 0 0");// stop rotating
+    ///ros::service::call("tank", tank);
+}
+
+//function to move a certain distance
+void robot_move_distance(double distance)
+{
+    long int usec=0;// modifying the distance for the time being
+    irobot_create_2_1::Tank tank;
+    usec = (distance)*1000000*3.33; // the time to travel in meters
+    tank.request.clear = 0;
+    tank.request.left = 300;
+    tank.request.right = 300;
+    ros::service::call("tank", tank);
+/*	if(usec > 3000000)
+	{//if the time period is too long then one could drift because of angle
+		usec = 3000000;
+	}
+*/
+//  system("rosservice call tank 0 300 300"); // move forward at max speed
+   /// usleep(usec); // Ramtin commented lines
+   /// tank.request.clear = 0;
+   /// tank.request.left = 0;
+   /// tank.request.right = 0;
+   /// ros::service::call("tank",tank);
+//    system("rosservice call tank 0 0 0"); // bring the robot to a halt
+}
+
+// Ramtin -- New function to use Circle instead of Tank
+//function to move a certain distance
+void robot_move_distance_circle(double distance, double velocity, double rotation)
+{
+    long int usec=0;// modifying the distance for the time being
+    irobot_create_2_1::Circle circle;
+    usec = (distance)*1000000*3.33; // the time to travel in meters
+    circle.request.clear = 0;
+    circle.request.speed = velocity;
+    circle.request.radius = rotation;
+    ros::service::call("circle", circle);
+/*	if(usec > 3000000)
+	{//if the time period is too long then one could drift because of angle
+		usec = 3000000;
+	}
+*/
+//  system("rosservice call tank 0 300 300"); // move forward at max speed
+    usleep(usec);
+    circle.request.clear = 0;
+    circle.request.speed = 0;
+    circle.request.radius = 0;
+    ros::service::call("circle", circle);
+//    system("rosservice call tank 0 0 0"); // bring the robot to a halt
+}
+
+
+void robot_stop()
+{
+	irobot_create_2_1::Stop stop;
+	stop.request.stop = 0;
+        ros::service::call("stop",stop);
+//	system("rosservice call tank 0 0 0");
+}
+
+//function to calculate the actual angle and distance that needs to be moved
+struct movement robot_cord_to_move(struct coordinate move_to_cord)
+{
+    float x_cord, y_cord, travel_distance, cos_val, angle_of_rotation;
+    struct movement move;
+    x_cord = move_to_cord.x;//convert from feet to meters
+    y_cord = move_to_cord.y;
+
+    travel_distance = sqrt((x_cord*x_cord) + (y_cord*y_cord));
+    // get the cos value
+    cos_val = x_cord/travel_distance;
+    angle_of_rotation = acos(cos_val);
+    printf("angle of rotation: %f\n", angle_of_rotation);
+
+    angle_of_rotation = (angle_of_rotation*180)/3.14;
+    if( y_cord<0 && (fabs(y_cord) > .0005) && x_cord<0)
+    {// the greater than condition is put because
+     // if we overshoot y by a margin value it will make the robot turn
+     // around in opposite direction which is not expected behavior
+        angle_of_rotation = 360- angle_of_rotation;
+        printf("the angle lies in quad 3, converted to: %f\n",
+                angle_of_rotation);
+    }
+    if( y_cord < 0 && x_cord>0 && (fabs(y_cord) > .0005))
+    {
+        angle_of_rotation = 360-angle_of_rotation;
+        printf("the angle lies in quad 4, converted to: %f\n",
+                angle_of_rotation);
+    }
+
+    // the robot is already rotated at some angle to the real axis
+    // we need to rotate the robot compared to the real world axis only
+    angle_of_rotation = add_angle(angle_of_rotation, -move_to_cord.angle);
+
+    // the angle of rotation is finally ready
+    move.angle = angle_of_rotation;
+    move.distance = travel_distance;
+
+    printf("next move angle: %f, distance: %f\n", angle_of_rotation, travel_distance);
+
+
+    return move;
+}
+
+// this function will actually determine the coordinates that are needed to be
+// moved to once it confirms the location compared to readings from stargazer
+void next_move(struct coordinate next_move)
+{
+    printf("\n---- ENTERING NEXT MOVE ..\n");
+
+    struct coordinate curr_loc, move_cord;
+    struct movement translated_move;
+    struct timeval start_tv, end_tv;// to calculate the angle moved
+    long int elapsed_time=0;
+
+    get_curr_location(&curr_loc);
+    move_cord.x = next_move.x - curr_loc.x;
+    move_cord.y = next_move.y - curr_loc.y;
+    move_cord.z = next_move.z - curr_loc.z;
+    move_cord.angle = curr_loc.angle;
+
+    translated_move.angle = 0;
+  //  fprintf(debug_move, "next_move values - x: %f, y: %f, angle: %f\n",
+     //           next_move.x, next_move.y, next_move.angle);
+    fflush(debug_move);
+    //while((sqrt(move_cord.x * move_cord.x + move_cord.y * move_cord.y))>0.2)// keep trying to reach the point -- RAMTIN\
+      while(1)
+    {
+        //compared to real world cord given w.r.t. the robot
+        get_curr_location(&curr_loc);
+        move_cord.x = next_move.x - curr_loc.x;
+        move_cord.y = next_move.y - curr_loc.y;
+        move_cord.z = next_move.z - curr_loc.z;
+        move_cord.angle = curr_loc.angle;
+
+
+        translated_move = robot_cord_to_move(move_cord);// this should produce the distance and angle in meter and degrees
+        //translated_move.angle = move_cord.angle;
+
+        printf("\n---- Turning: Rot: %f\n", curr_loc.angle);
+        printf("\n---- Turning: Rot: %f\n", translated_move.angle);
+
+        robot_angle_turn(move_cord.angle);						 // RMT:: translated_move.angle --> rotation
+        ///robot_move_distance_circle(translated_move.distance); // Ramtin call ..._circle() instead
+        printf("\n---- Turning: Rot: %f\n", translated_move.angle);
+		///robot_move_distance_circle(translated_move.distance, velocity, rotation);
+        if(move_cord.angle < 20)
+            {
+                printf("\n---- Its Done and translated_move.angle = %f \n", translated_move.angle);
+                robot_stop();
+                usleep(2000000);
+                return;
+            }
+    }
+    //robot_stop();
+    //usleep(2000000);
+}
+
+// function get the current location from stargazer and translates to real world
+// coordinates
+void get_curr_location(struct coordinate* location)
+{
+    struct coordinate new_loc;
+    int marker_id, i, j=1;
+
+    while(j)
+    {
+        ros::spinOnce();
+        //usleep(50000);
+        pthread_mutex_lock(&curr_location_lock);
+        new_loc = curr_location;
+        marker_id = curr_marker;
+        pthread_mutex_unlock(&curr_location_lock);
+        //get_stargazer_coord(&new_loc, &marker_id);
+        for(i=0; i<TOTAL_MARKERS; i++)
+        {
+           if(marker_id == markers[i].tag)
+           {
+               j=0;
+               break;
+           }
+        }
+        printf("trying again for a star gazer read\n");
+    }
+
+    translate_stargz_real_cord(&new_loc, marker_id);
+  fflush(debug_move);
+   // fprintf(debug_move,"marker_id: %d\n", marker_id);
+    location->x = new_loc.x;
+    location->y = new_loc.y;
+    location->z = new_loc.z;
+    location->angle = new_loc.angle;
+    return;
+}
+
+// function to get the stargazer coordinates and data from the stargazer node
+// through ROS or some other system
+void get_stargazer_coord(const stargazer_cu::Pose2DTagged::ConstPtr& data)
+{
+    //printf("stargazer values are: %f, %f, %f\n", data->x, data->y, data->theta);
+    pthread_mutex_lock(&curr_location_lock);
+    curr_location.x = data->x;
+    curr_location.y = data->y;
+    curr_location.angle = (180*data->theta)/3.14;
+
+    curr_location.angle = add_angle(curr_location.angle, 0);
+    curr_marker = data->tag;
+    pthread_mutex_unlock(&curr_location_lock);
+}
+
+//function to translate the stargazer coordinates to real world coordinates
+// this will be done by using a table which tells the location and orientation
+// of a marker in the real world.
+void translate_stargz_real_cord(struct coordinate *translate_loc, int marker_id)
+{
+    struct coordinate marker;
+    // look up the real coordinates based on marker_id
+    // for now we consider it being a 2D array already initialized
+
+    marker.x = 0;//warning: we assign these coordinates in case we go out of range for
+    marker.y = 0;// stargazers, hence its erronous for now
+    marker.angle = 0;
+//    fprintf(debug_move, "translate values - x: %f, y: %f\n",
+  //          translate_loc->x*.3048, translate_loc->y*.3048);
+    fflush(debug_move);
+    for(int i=0; i < TOTAL_MARKERS ; i++)
+    {
+        if(marker_id == markers[i].tag)
+        {
+            marker.x = markers[i].location.x;// gives the x coordinate
+            marker.y = markers[i].location.y;
+            marker.angle = markers[i].location.angle;
+            break;
+        }
+    }
+
+    // we find the current location based on this
+/*    translate_loc->x = translate_loc->x*.3048 + marker.x;
+    translate_loc->y = translate_loc->y*.3048 + marker.y;*/
+translate_loc->x = translate_loc->x + marker.x;
+    translate_loc->y = translate_loc->y + marker.y;
+
+    translate_loc->angle = add_angle(-translate_loc->angle, marker.angle);
+
+    return;
+}
+
+// function needs to take care of reading events one after another and passing
+// them down to the lower executing class
+void *event_reader(void *arg)
+{
+    struct move_event new_event;
+    struct coordinate move;
+    while(1)// keep reading the events from the queue whenever possible
+    {
+	debug_move = fopen("/home/cpslab/debug.txt", "a+");
+	if(debug_move == NULL)
+        {
+            printf("unable to open debug file\n");
+            exit(0);
+        }
+
+        get_event(&new_event);
+        printf("next move about to happen\n");
+        move = new_event.move_to;
+        next_move(move);
+	fclose(debug_move);
+    }
+}
+
+// function to get an event from the event queue, linked list
+void get_event(struct move_event *event)
+{
+    struct move_event *temp = NULL;
+    while(1)
+    {
+        pthread_mutex_lock(&event_lock);
+        //printf("getting a new event\n");
+        if(event_queue != NULL)
+        {// store to the event and return back
+            memcpy(event, event_queue, sizeof(struct move_event));
+            temp = event_queue;
+            event_queue = event_queue->next;
+
+            free(temp);
+            printf("read event going now\n");
+            pthread_mutex_unlock(&event_lock);
+            return;
+        }
+        else
+        {
+            pthread_mutex_unlock(&event_lock);
+            pthread_mutex_lock(&wait_lock);
+            pthread_mutex_unlock(&wait_lock);
+        }
+
+    }
+}
+
+// function to set an event in the stack, linked list style
+void set_event(struct move_event event)
+{
+    pthread_mutex_lock(&event_lock);
+    struct move_event *temp = event_queue;
+
+    printf("locked the mutex\n");
+    if(event_queue != NULL)
+    {
+        while(temp->next != NULL)
+        {
+            temp = temp->next;
+        }
+    // add the event to the end of the event queue
+        printf("the temp \n");
+        temp->next = (struct move_event *) malloc(sizeof(move_event));
+        temp = temp->next;
+        temp->move_to.x = event.move_to.x;
+        temp->move_to.y = event.move_to.y;
+        temp->next = NULL;
+    }
+    else
+    {// if this is the first event
+        event_queue = (struct move_event *) malloc(sizeof(move_event));
+        event_queue->move_to.x = event.move_to.x;
+        event_queue->move_to.y = event.move_to.y;
+        event_queue->next = NULL;
+        printf("first one\n");
+        pthread_mutex_trylock(&wait_lock);
+        pthread_mutex_unlock(&wait_lock);
+    }
+    pthread_mutex_unlock(&event_lock);
+}
+
+void robot_init()
+{
+
+    pthread_mutex_lock(&curr_location_lock);
+    curr_location.x = 0 ;
+    curr_location.y = 0 ;
+    curr_location.angle = 0;
+    curr_marker = 0;
+    pthread_mutex_unlock(&curr_location_lock);
+
+ /*   debug_move = fopen("./debug.txt", "a+");
+    if(debug_move == NULL)
+    {
+	printf("unable to open debug file\n");
+	exit(0);
+    }*/
+    marker_init();
+
+}
+
+void marker_init()
+{
+    markers[0].tag = 10576;
+    markers[0].location.x = -3.14;
+    markers[0].location.y = 5.45;
+    markers[0].location.z = 0;
+    markers[0].location.angle = 0;
+
+    markers[1].tag = 10578;
+    markers[1].location.x = -4.27;
+    markers[1].location.y = 1.73;
+    markers[1].location.z = 0;
+    markers[1].location.angle = 0;
+
+    markers[2].tag = 10594;
+    markers[2].location.x = -2.40;
+    markers[2].location.y = .71;
+    markers[2].location.z = 0;
+    markers[2].location.angle = 0;
+
+    markers[3].tag = 10640;
+    markers[3].location.x = -.029;
+    markers[3].location.y = 4.87;
+    markers[3].location.z = 0;
+    markers[3].location.angle = 0;
+
+    markers[4].tag = 10642;
+    markers[4].location.x = 1.84;
+    markers[4].location.y = 7.35;
+    markers[4].location.z = 0;
+    markers[4].location.angle = 0;
+
+    markers[5].tag = 10546;
+    markers[5].location.x = -3.23;
+    markers[5].location.y = 7.90;
+    markers[5].location.z = 0;
+    markers[5].location.angle = 0;
+
+    markers[6].tag = 10566;
+    markers[6].location.x = 2.08;
+    markers[6].location.y = -.033;
+    markers[6].location.z = 0;
+    markers[6].location.angle = 0;
+
+    markers[7].tag = 10580;
+    markers[7].location.x = 2.06;
+    markers[7].location.y = 2.60;
+    markers[7].location.z = 0;
+    markers[7].location.angle = 0;
+
+    markers[8].tag = 10608;
+    markers[8].location.x = 2.02;
+    markers[8].location.y = 4.88;
+    markers[8].location.z = 0;
+    markers[8].location.angle = 0;
+
+    markers[9].tag = 10610;
+    markers[9].location.x = -.059;
+    markers[9].location.y = 7.33;
+    markers[9].location.z = 0;
+    markers[9].location.angle = 0;
+
+    markers[10].tag = 10596;
+    markers[10].location.x = .03;
+    markers[10].location.y = 2.45;
+    markers[10].location.z = 0;
+    markers[10].location.angle = 0;
+
+    markers[11].tag = 10678;
+    markers[11].location.x = -2.47;
+    markers[11].location.y = 3.20;
+    markers[11].location.z = 0;
+    markers[11].location.angle = 0;
+
+    markers[12].tag = 10674;
+    markers[12].location.x = 0;
+    markers[12].location.y = 0;
+    markers[12].location.z = 0;
+    markers[12].location.angle = 0;
+
+}
+
+/*
+
+int main(int argc, char **argv)
+{
+    struct move_event move;
+
+    robot_init();
+
+    marker_cord[0][0] = 0;
+    marker_cord[0][1] = 0;
+    marker_cord[0][2] = 0;
+    printf("about to call the first event\n");
+    move.move_to.x = 1;
+    move.move_to.y = 1;
+    move.move_to.angle = 0;
+    set_event(move);
+
+    ros::spinOnce();
+
+    printf("calling the second event\n");
+    move.move_to.x = 2;
+    move.move_to.y = 2;
+    move.move_to.angle = 0;
+    set_event(move);
+
+    printf("event reading to start\n");
+    event_reader();
+
+    return 0;
+}
+**/

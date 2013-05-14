@@ -1,0 +1,84 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <string.h>
+#include <stdio.h>
+#include <cstring>
+#include <cstdlib>
+
+using namespace std;
+int main(){
+	string line;
+	char* lineChars = new char[line.size()+1]; 
+	ifstream kimFile;
+	char* kimCoordsChars;
+	int kimCoordsArr[100];
+	int k=0;
+	kimFile.open("kimCoords.txt", ios::in);
+	if(kimFile.is_open()){
+			getline (kimFile, line);
+			cout << "\nCoords: " << line << endl; 
+			int i=0, j=0;
+			char temp[10];			
+			while(line[i] != '\0'){
+				if(line[i] != ','){ 
+					temp[j] = line[i];
+					j++;
+				}
+				else{
+					temp[j] = '\0';
+					kimCoordsArr[k]=atoi(temp);
+					j=0; k++;
+				}
+				//cout << line[i] << endl;
+			i++;			
+			}
+
+		kimFile.close();
+	}
+	else
+		cout <<"\n\nCouldn't open File!\n\n";	
+	int i;
+
+	ofstream parthFile;
+	parthFile.open("coordinates.txt");
+
+	for(i=0; i<k; i++){
+		cout << "coord " << i << "= " << kimCoordsArr[i] << endl;
+		switch(kimCoordsArr[i]){
+			case 1: parthFile << "0.19 3.55" << endl; break;
+			case 2: parthFile << "1.05 1.69" << endl; break;
+			case 3: parthFile << "0.71 0.60" << endl; break;
+			case 4: parthFile << "1.29 3.82" << endl; break;
+			case 5: parthFile << "0.207 2.12" << endl; break;
+
+			case 6: parthFile << "0.71 3.15" << endl; break;
+			case 7: parthFile << "0.68 2.83" << endl; break;
+			case 8: parthFile << "2.17 3.36" << endl; break;
+			case 9: parthFile << "2.17 2.70" << endl; break;
+			case 10: parthFile << "1.7 3.3" << endl; break;
+
+			case 11: parthFile << "1.7 2.7" << endl; break;
+			case 12: parthFile << "-0.12 1.10" << endl; break;
+			case 13: parthFile << "-0.12 0.85" << endl; break;
+			case 14: parthFile << "-0.5 1.10" << endl; break;
+			case 15: parthFile << "-0.5 0.85" << endl; break;
+
+			case 16: parthFile << "2.17 1.10" << endl; break;
+			case 17: parthFile << "2.17 0.85" << endl; break;
+			case 18: parthFile << "1.7 1.10" << endl; break;
+			case 19: parthFile << "1.7 0.851" << endl; break;
+			case 20: parthFile << "0.247 3.20" << endl; break;
+
+			case 21: parthFile << "-0.5 3.15" << endl; break;
+			case 22: parthFile << "-0.12 2.70" << endl; break;
+			case 23: parthFile << "-0.17 2.1" << endl; break;
+			case 24: parthFile << "1.25 3.30" << endl; break;
+			case 25: parthFile << "0.71 0.85" << endl; break;
+			case 26: parthFile << "1.1 1.18" << endl; break;
+			default: break;
+		}
+	}
+	parthFile.close();
+	return 0;
+}
